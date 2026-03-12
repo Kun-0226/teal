@@ -52,10 +52,11 @@ class Teal():
             self.env.reset('train')
 
             ids = range(self.env.idx_start, self.env.idx_stop)
+            #将索引列表按batch_size切分成多个批次
             loop_obj = tqdm(
                 [ids[i:i+batch_size] for i in range(0, len(ids), batch_size)],
                 desc=f"Training epoch {epoch}/{num_epoch}: ")
-
+            #批次内训练循环，每个批次训练完再更新梯度
             for idx in loop_obj:
                 loss = 0
                 for _ in idx:

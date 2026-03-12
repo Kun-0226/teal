@@ -116,7 +116,7 @@ class TealActor(nn.Module):
         # deterministic std
         else:
             return mean, self.std
-
+# 根据当前观测 obs，通过神经网络生成一个“原始动作 raw_action”，用于后续计算流量分配比例；在训练时还会给出该动作的对数概率 log_probability（用于强化学习的损失函数）。
     def evaluate(self, obs, deterministic=False):
         """Return raw action before softmax split ratio.
 

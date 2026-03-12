@@ -29,12 +29,12 @@ class TealEnv(object):
         """Initialize Teal environment.
 
         Args:
-            obj: objective
+            obj: objective，优化目标
             topo: topology name
             problems: problem list
             num_path: number of paths per demand
             edge_disjoint: whether edge-disjoint paths
-            dist_metric: distance metric for shortest paths
+            dist_metric: distance metric for shortest paths 距离衡量指标
             rho: hyperparameter for the augumented Lagranian
             train size: train start index, stop index
             val size: val start index, stop index
@@ -59,6 +59,7 @@ class TealEnv(object):
 
         # init matrices related to topology
         self.G = self._read_graph_json(topo)
+        #self.capacity 是链路容量（EdgeNode）
         self.capacity = torch.FloatTensor(
             [float(c_e) for u, v, c_e in self.G.edges.data('capacity')])
         self.num_edge_node = len(self.G.edges)
@@ -94,17 +95,28 @@ class TealEnv(object):
         """Return observation (capacity + traffic matrix)."""
 
         return self.obs
+#TODO:从文件中获取observation，如果要修改输入的话可能要在这里修改
+    """
+    🧠 总结一句话
 
+这个函数做了四件核心事情：
+
+1️⃣ 从文件中读 traffic matrix
+2️⃣ 删除“节点到自身”的流量
+3️⃣ 把每个 demand 扩展成多个 path 节点特征
+4️⃣ 拼接链路容量，形成神经网络输入状态
+    """
     def _read_obs(self):
         """Return observation (capacity + traffic matrix) from files."""
 
         topo, topo_fname, tm_fname = self.problems[self.idx]
+        #价值流量矩阵
         with open(tm_fname, 'rb') as f:
             tm = pickle.load(f)
         # remove demands within nodes
         tm = torch.FloatTensor(
             [[ele]*self.num_path for i, ele in enumerate(tm.flatten())
-                if i % len(tm) != i//len(tm)]).flatten()
+                if i % len(tm) != i//len(tm)]).flatten()# i % len(tm) != i//len(tm)排除对角线，即自己到自己的流量
         obs = torch.concat([self.capacity, tm]).to(self.device)
         # simulate link failures in testing
         if self.num_failure > 0 and self.idx_start == self.test_start:
@@ -112,6 +124,14 @@ class TealEnv(object):
                 random.sample(range(self.num_edge_node),
                 self.num_failure)).to(self.device)
             obs[idx_failure] = 0
+        # 最终 obs 是一个一维 tensor：
+        #
+        # obs.shape = (num_edge_node + num_path_node,)
+        #
+        #
+        # 内容结构：
+        #
+        # [capacity_e1, capacity_e2, ..., demand_p1, demand_p2, demand_p3, ...]
         return obs
 
     def _next_obs(self):
@@ -143,8 +163,8 @@ class TealEnv(object):
                 -self.num_path_node::self.num_path].sum().item(),
         }
         return problem_dict
-
-    def step(self, raw_action, num_sample=0, num_admm_step=0):
+#计算奖励
+    def step(self, raw_action, num_sample=0, num_admm_step=0,failed_link:list[list]=[[]]):
         """Return the reward of current action.
 
         Args:
@@ -154,9 +174,9 @@ class TealEnv(object):
         """
 
         info = {}
-        if self.idx_start == self.train_start:
+        if self.idx_start == self.train_start:# 训练阶段
             reward = self.take_action(raw_action, num_sample)
-        else:
+        else: #测试阶段
             start_time = time.time()
             action = self.transform_raw_action(raw_action)
             if self.obj == 'total_flow':
@@ -165,12 +185,20 @@ class TealEnv(object):
                 action = self.round_action(action)
             info['runtime'] = time.time() - start_time
             info['sol_mat'] = self.extract_sol_mat(action)
-            reward = self.get_obj(action)
+            #TODO:在这里实现reweave的局部路径修补机制
+            #print("-----------------------------")
+            #print(action.size())
+            if failed_link.size()==0:
+                #没有链路故障
+                reward = self.get_obj(action)
+            else:
+                #有链路故障
+                reward = self.get_obj(action)
 
         # next observation
         self._next_obs()
         return reward, info
-
+# 得到目标结果
     def get_obj(self, action):
         """Return objective."""
 
@@ -181,6 +209,8 @@ class TealEnv(object):
                 action[self.p2e[0]], self.p2e[1]
                 )/self.obs[:-self.num_path_node]).max()
 
+
+# 把神经网络输入的结果（raw action)转换为流量分配方案
     def transform_raw_action(self, raw_action):
         """Return network flow allocation as action.
 
@@ -193,10 +223,14 @@ class TealEnv(object):
 
         # translate ML output to split ratio through softmax
         # 1 in softmax represent unallocated traffic
+        ## 第一步：对原始动作做指数运算（保证所有值为正）
         raw_action = raw_action.exp()
+        #最终效果：所有路径的分配比例之和 = sum(指数值) / (1+sum(指数值)) < 1，剩余的 1/(1+sum(指数值)) 是未分配流量
         raw_action = raw_action/(1+raw_action.sum(axis=-1)[:, None])
 
         # translate split ratio to flow
+        ## 展平为一维张量（消除多维结构）
+        # 乘以各路径的容量/需求基数，得到实际流量
         raw_action = raw_action.flatten() * self.obs[-self.num_path_node:]
 
         return raw_action
@@ -356,7 +390,8 @@ class TealEnv(object):
         with open(os.path.join(TOPOLOGIES_DIR, topo)) as f:
             data = json.load(f)
         return json_graph.node_link_graph(data)
-
+# TODO 需要设计一下获得不同时间片的路径文件
+    #返回路径文件名
     def path_full_fname(self, topo, num_path, edge_disjoint, dist_metric):
         """Return full name of the topology path."""
 
@@ -364,7 +399,8 @@ class TealEnv(object):
             TOPOLOGIES_DIR, "paths", "path-form",
             "{}-{}-paths_edge-disjoint-{}_dist-metric-{}-dict.pkl".format(
                 topo, num_path, edge_disjoint, dist_metric))
-
+# TODO 设计一下获得不同时间片的路径
+    #读取路径文件获得路径
     def get_path(self, topo, num_path, edge_disjoint, dist_metric):
         """Return path dictionary."""
 
@@ -384,7 +420,7 @@ class TealEnv(object):
             with open(self.path_fname, "wb") as w:
                 pickle.dump(path_dict, w)
         return path_dict
-
+# 如果没有读到路径文件，则计算路径
     def compute_path(self, topo, num_path, edge_disjoint, dist_metric):
         """Return path dictionary through computation."""
 
@@ -406,6 +442,7 @@ class TealEnv(object):
 
         path_dict = self.get_path(topo, num_path, edge_disjoint, dist_metric)
         for (s_k, t_k) in path_dict:
+            ## 路径数量不足：用第一条路径重复填充，补到目标数量
             if len(path_dict[(s_k, t_k)]) < self.num_path:
                 path_dict[(s_k, t_k)] = [
                     path_dict[(s_k, t_k)][0] for _
@@ -428,6 +465,7 @@ class TealEnv(object):
             topo, num_path, edge_disjoint, dist_metric)
 
         # edge nodes' degree, index lookup
+        #对每个链路找一个链路标识
         edge2idx_dict = {edge: idx for idx, edge in enumerate(self.G.edges)}
         node2degree_dict = {}
         edge_num = len(self.G.edges)
@@ -440,6 +478,7 @@ class TealEnv(object):
                     continue
                 for path in path_dict[(s, t)]:
                     for (u, v) in zip(path[:-1], path[1:]):
+                        #src.append(edge_num+path_i)：给当前路径分配一个唯一标识（edge_num 是基础值，path_i 是路径序号），存入 src；
                         src.append(edge_num+path_i)
                         dst.append(edge2idx_dict[(u, v)])
 
@@ -459,6 +498,7 @@ class TealEnv(object):
             [src+dst, dst+src], dtype=torch.long).to(self.device)
         p2e = torch.tensor([src, dst], dtype=torch.long).to(self.device)
         p2e[0] -= len(self.G.edges)
+
 
         return edge_index, edge_index_values, p2e
 

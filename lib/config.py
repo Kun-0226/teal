@@ -1,3 +1,6 @@
+"""
+配置拓扑和流量文件地址
+"""
 import os
 
 TL_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
