@@ -75,7 +75,8 @@ def benchmark(problems, output_csv, arg):
         val_size=val_size,
         test_size=test_size,
         num_failure=num_failure,
-        device=device)
+        device=device,
+        failed_link=[(70,71)])
     teal_actor = TealActor(
         teal_env=teal_env,
         num_layer=num_layer,

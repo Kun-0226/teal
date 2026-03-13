@@ -17,7 +17,7 @@ from torch.distributions.uniform import Uniform
 from .config import TOPOLOGIES_DIR
 from .ADMM import ADMM
 from .path_utils import find_paths, graph_copy_with_edge_weights, remove_cycles
-
+from.utils import compute_local_backup_paths
 
 class TealEnv(object):
 
@@ -25,7 +25,7 @@ class TealEnv(object):
             self, obj, topo, problems,
             num_path, edge_disjoint, dist_metric, rho,
             train_size, val_size, test_size, num_failure, device,
-            raw_action_min=-10.0, raw_action_max=10.0):
+            raw_action_min=-10.0, raw_action_max=10.0,failed_link=[]):
         """Initialize Teal environment.
 
         Args:
@@ -81,7 +81,11 @@ class TealEnv(object):
 
         # new add
         self.edge2idx_dict # 链路到索引的映射，tuple(,)->int
-        self.local_backup_path #局部备份路径，dict{tuple(u,v):[[tuple(u,v),edge2...],path2...]}
+        with open(os.path.join(TOPOLOGIES_DIR, topo)) as f:
+            topo_data = json.load(f)
+        self.local_backup_paths = compute_local_backup_paths(topo_data, max_paths=4)
+        #self.local_backup_path={} #局部备份路径，dict{tuple(u,v):[[tuple(u,v),edge2...],path2...]}
+        self.failed_link=failed_link
 
     def reset(self, mode='test'):
         """Reset the initial conditions in the beginning."""
@@ -168,7 +172,7 @@ class TealEnv(object):
         }
         return problem_dict
 #计算奖励
-    def step(self, raw_action, num_sample=0, num_admm_step=0,failed_link:list[tuple]=[[]]):
+    def step(self, raw_action, num_sample=0, num_admm_step=0):
         """Return the reward of current action.
 
         Args:
@@ -176,7 +180,7 @@ class TealEnv(object):
             num_sample: number of samples for reward during training
             num_admm_step: number of ADMM steps during testing
         """
-
+        failed_link=self.failed_link
         info = {}
         if self.idx_start == self.train_start:# 训练阶段
             reward = self.take_action(raw_action, num_sample)
@@ -192,13 +196,13 @@ class TealEnv(object):
             #TODO:在这里实现reweave的局部路径修补机制
             #print("-----------------------------")
             #print(action.size())
-            if failed_link.size()==0:
+            if len(failed_link)==0:
                 #没有链路故障
                 reward = self.get_obj(action)
             else:
                 #有链路故障
-                reward = self.get_obj_with_failure_by_local_backup(action,failed_link)
-
+                #reward = self.get_obj_with_failure_without_local_backup(action,failed_link)
+                reward = self.get_obj_with_failure_by_local_backup(action, failed_link)
         # next observation
         self._next_obs()
         return reward, info
@@ -223,7 +227,7 @@ class TealEnv(object):
         #1.故障链路预处理
         failed_edge_ids = []  # 故障链路的编号
         # 获取原始网络容量
-        capacities = self.obs[:-self.num_path_node].clone()
+        #capacities = self.obs[:-self.num_path_node].clone()
         for (u,v) in failed_link:
             if (u, v) in self.edge2idx_dict:
                 failed_edge_ids.append(self.edge2idx_dict[(u, v)])
@@ -268,29 +272,39 @@ class TealEnv(object):
                     lost_flow+=affected_flow
                 else:
 
-                    spilt_flow=affected_flow/len(backup_paths)
+                    spilt_flow=affected_flow/len(valid_backup_paths)
             #对备用路径上的流量进行分配
-            for backup_path in backup_paths:
+            for backup_path in valid_backup_paths:
                 for edge in backup_path:
                     edge_idx=self.edge2idx_dict[edge]
                     edge_flow[edge_idx]+=spilt_flow
-                    if edge_flow[edge_idx]>capacities[edge_idx]:
-                        # 链路容量不够，丢包
-                        lost_flow += capacities[edge_idx]-edge_flow[edge_idx]
-                        edge_flow[edge_idx]=capacities[edge_idx]
+
 
         #4.用new_action重新计算目标指标
         if self.obj == 'total_flow':
-            # 原本计划投递的总流量
+            #return torch.tensor(action.sum().item()-lost_flow, device=self.device)
             original_total_flow = action.sum().item()
-            # 实际成功投递的流量 = 原总流量 - 彻底断掉且无法重路由的流量
-            return torch.tensor(original_total_flow - lost_flow, device=self.device)
+            # 备份原始容量并排除故障链路
+            capacities = self.obs[:-self.num_path_node].clone()
+            capacities[failed_edge_ids] = float('inf')  # 故障链路上由于流量已经清零，无需计算溢出
+
+            # 计算每条链路上由于备份流量涌入导致的溢出量 (edge_flow - capacity，如果没超载则是 0)
+            overflow_per_edge = (edge_flow - capacities).relu()
+            # 全网总溢出量 (这部分流量会在路由器因为队列塞满而丢弃)
+            total_overflow = overflow_per_edge.sum().item()
+            print("total_overflow: {:.2f}".format(total_overflow))
+            # 实际成功投递的流量 = 原总流量 - 没有备用路径丢失的 - 备用路径拥塞丢弃的
+            # 使用 max 防止多重拥塞导致扣减出负数
+            final_delivered_flow = max(0.0, original_total_flow - lost_flow - total_overflow)
+
+            return torch.tensor(final_delivered_flow, device=self.device)
 
         elif self.obj == 'min_max_link_util':
 
 
             # 把故障链路的容量设为正无穷，避免计算利用率时出现 0/0 或抛出除零异常
             # 因为它们的 edge_flow 已经被设为 0 了，0 / inf = 0，不影响全局 Max
+            capacities = self.obs[:-self.num_path_node].clone()
             capacities[failed_edge_ids] = float('inf')
 
             # 计算重分配后的最大链路利用率 (Max Link Utilization)
@@ -299,7 +313,83 @@ class TealEnv(object):
 
 #没有局部路径的时候，端到端重新分配（对比实验）
     def get_obj_with_failure_without_local_backup(self, action,failed_link):
-        pass
+        # 1. 提取故障链路的全局编号
+        failed_edge_ids = []
+        for (u, v) in failed_link:
+            if (u, v) in self.edge2idx_dict:
+                failed_edge_ids.append(self.edge2idx_dict[(u, v)])
+
+        if not failed_edge_ids:
+            return self.get_obj(action)
+            # 2. 找出所有受影响瘫痪的“端到端路径”
+        failed_edge_tensor = torch.tensor(failed_edge_ids, dtype=torch.long, device=self.device)
+        is_edge_failed = torch.zeros(self.num_edge_node, dtype=torch.bool, device=self.device)
+        is_edge_failed[failed_edge_tensor] = True
+        #每条路径上所有链路的故障标记加起来
+        edge_fails_on_path=is_edge_failed[self.p2e[1]].int() # 得到一个一维向量[0,1,0...]表示这个位置的path对应的链路有故障
+        path_fails_sum = torch_scatter.scatter(
+            edge_fails_on_path,
+            self.p2e[0],
+            dim_size=self.num_path_node,
+            reduce="sum"
+        )
+        is_path_failed = path_fails_sum > 0  # 一维 bool 张量，True表示路径瘫痪
+        # 3. 按Demand (源目节点对的数量)进行端到端流量重分配
+        # 将一维流量分配变形为二维：(Demand数量, 每对Demand的路径数)，方便同组内转移流量
+        action_2d = action.clone().reshape(-1, self.num_path)
+        is_path_failed_2d = is_path_failed.reshape(-1, self.num_path) # 0代表这个path故障，(Demand数量, 每对Demand的路径数)
+        is_path_healthy_2d = ~is_path_failed_2d
+        # 计算每个 Demand 有多少流量因为故障要重新分配
+        flow_to_reallocate = (action_2d * is_path_failed_2d).sum(dim=1)  # 形状: (Demand数量,)
+        # 将瘫痪路径上的流量清零
+        action_2d[is_path_failed_2d] = 0.0
+        # 获取健康路径的当前分配情况，作为重新分配的比例权重
+        remaining_flow = action_2d.sum(dim=1)  # 每个 Demand 在健康路径上剩余的总流量，形状: (Demand数量,)
+        num_healthy_paths = is_path_healthy_2d.sum(dim=1)  # 每个 Demand 还剩几条健康路径，形状: (Demand数量,)
+        # case1:如果健康路径上本来就有流量，按原有的流量比例进行同比例放大
+        # 构建重分配权重矩阵
+        weights = torch.zeros_like(action_2d)
+        case1 = remaining_flow > 0
+        if case1.any():
+            # case1是1维，代表第几个demand,weights是2维，行是Demand数量，列是每对Demand的路径数，值是每条路径的分流权重
+            # 通过广播机制，可以得到每个Demand对应每条路径的分流权重
+            #每个位置的值是通过该path原来的流量除以健康路径的流量得到的，表示把原来所有流量分配到健康路径上的比例，如果这个路径有故障，前面已经把对应action_2d的值设为0了
+            weights[case1] = action_2d[case1] / remaining_flow[case1].unsqueeze(1)
+
+        # case2：如果健康路径原本分配的流量是0（比如全压在主路径上了），那就把丢失的流量均分给剩下的健康路径
+        case2 = (remaining_flow == 0) & (num_healthy_paths > 0)
+        if case2.any():
+            #1/剩余健康路径数   0/剩余健康路径数（对故障path）
+            weights[case2] = is_path_healthy_2d[case2].float() / num_healthy_paths[case2].unsqueeze(1).float()
+        # 把重新分配的流量乘以权重，重新加给健康路径
+        action_2d += flow_to_reallocate.unsqueeze(1) * weights
+        # 重新展平为一维张量，这就是端到端重路由后的新动作分配
+        new_action = action_2d.flatten()
+        # 4. 用重新分配后的路径流量 (new_action) 计算目标指标
+        if self.obj == 'total_flow':
+            #return new_action.sum()
+            # 备份原始容量
+            original_capacities = self.obs[:-self.num_path_node].clone()
+            # 临时将故障链路容量设为 0
+            self.obs[:-self.num_path_node][failed_edge_tensor] = 1e-5
+            #  round_action 进行路径级别的削减 (模拟丢包)
+            valid_new_action = self.round_action(new_action, round_demand=False, round_capacity=True)
+            # 恢复环境原始容量
+            self.obs[:-self.num_path_node] = original_capacities
+
+            return valid_new_action.sum()
+        elif self.obj == 'min_max_link_util':
+            # 用新的 action 重新计算链路层面的流量
+            new_edge_flow = torch_scatter.scatter(
+                new_action[self.p2e[0]],
+                self.p2e[1],
+                dim_size=self.num_edge_node
+            )
+            capacities = self.obs[:-self.num_path_node].clone()
+            # 同样要把故障链路的容量设为正无穷，屏蔽它们对利用率最大值的干扰
+            capacities[failed_edge_tensor] = float('inf')
+
+            return (new_edge_flow / capacities).max()
 # 把神经网络输入的结果（raw action)转换为流量分配方案
     def transform_raw_action(self, raw_action):
         """Return network flow allocation as action.
@@ -570,7 +660,7 @@ class TealEnv(object):
                     for (u, v) in zip(path[:-1], path[1:]):
                         #src.append(edge_num+path_i)：给当前路径分配一个唯一标识（edge_num 是基础值，path_i 是路径序号），存入 src；
                         src.append(edge_num+path_i)
-                        dst.append(edge2idx_dict[(u, v)])
+                        dst.append(self.edge2idx_dict[(u, v)])
 
                         if src[-1] not in node2degree_dict:
                             node2degree_dict[src[-1]] = 0
