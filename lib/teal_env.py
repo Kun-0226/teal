@@ -77,15 +77,18 @@ class TealEnv(object):
         self.raw_action_min = raw_action_min
         self.raw_action_max = raw_action_max
 
-        self.reset('train')
+
 
         # new add
+        #-----------------------------
         self.edge2idx_dict # 链路到索引的映射，tuple(,)->int
         with open(os.path.join(TOPOLOGIES_DIR, topo)) as f:
             topo_data = json.load(f)
         self.local_backup_paths = compute_local_backup_paths(topo_data, max_paths=4)
         #self.local_backup_path={} #局部备份路径，dict{tuple(u,v):[[tuple(u,v),edge2...],path2...]}
         self.failed_link=failed_link
+        # -----------------------------
+        self.reset('train')
 
     def reset(self, mode='test'):
         """Reset the initial conditions in the beginning."""
@@ -132,6 +135,12 @@ class TealEnv(object):
                 random.sample(range(self.num_edge_node),
                 self.num_failure)).to(self.device)
             obs[idx_failure] = 0
+        # 故障清零
+        if len(self.failed_link) !=0and self.idx_start == self.test_start:
+            for (u,v) in self.failed_link:
+
+                edge_idx=self.edge2idx_dict[(u,v)]
+                obs[edge_idx] = 0
         # 最终 obs 是一个一维 tensor：
         #
         # obs.shape = (num_edge_node + num_path_node,)
@@ -201,8 +210,9 @@ class TealEnv(object):
                 reward = self.get_obj(action)
             else:
                 #有链路故障
+                reward = self.get_obj(action)
                 #reward = self.get_obj_with_failure_without_local_backup(action,failed_link)
-                reward = self.get_obj_with_failure_by_local_backup(action, failed_link)
+                #reward = self.get_obj_with_failure_by_local_backup(action, failed_link)
         # next observation
         self._next_obs()
         return reward, info
