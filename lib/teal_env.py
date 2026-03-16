@@ -56,22 +56,23 @@ class TealEnv(object):
         self.test_start, self.test_stop = test_size
         self.num_failure = num_failure
         self.device = device
+        self.rho=rho
 
         # init matrices related to topology
-        self.G = self._read_graph_json(topo)
+        #self.G = self._read_graph_json(topo)
         #self.capacity 是链路容量（EdgeNode）
-        self.capacity = torch.FloatTensor(
-            [float(c_e) for u, v, c_e in self.G.edges.data('capacity')])
-        self.num_edge_node = len(self.G.edges)
-        self.num_path_node = self.num_path * self.G.number_of_nodes()\
-            * (self.G.number_of_nodes()-1)
-        self.edge_index, self.edge_index_values, self.p2e = \
-            self.get_topo_matrix(topo, num_path, edge_disjoint, dist_metric)
+        #self.capacity = torch.FloatTensor(
+        #    [float(c_e) for u, v, c_e in self.G.edges.data('capacity')])
+        #self.num_edge_node = len(self.G.edges)
+        #self.num_path_node = self.num_path * self.G.number_of_nodes()\
+        #    * (self.G.number_of_nodes()-1)
+        #self.edge_index, self.edge_index_values, self.p2e = \
+        #    self.get_topo_matrix(topo, num_path, edge_disjoint, dist_metric)
 
         # init ADMM
-        self.ADMM = ADMM(
-            self.p2e, self.num_path, self.num_path_node,
-            self.num_edge_node, rho, self.device)
+        #self.ADMM = ADMM(
+        #    self.p2e, self.num_path, self.num_path_node,
+        #    self.num_edge_node, rho, self.device)
 
         # min/max value when clamp raw action
         self.raw_action_min = raw_action_min
@@ -81,10 +82,10 @@ class TealEnv(object):
 
         # new add
         #-----------------------------
-        self.edge2idx_dict # 链路到索引的映射，tuple(,)->int
-        with open(os.path.join(TOPOLOGIES_DIR, topo)) as f:
-            topo_data = json.load(f)
-        self.local_backup_paths = compute_local_backup_paths(topo_data, max_paths=4)
+        self.edge2idx_dict=None # 链路到索引的映射，tuple(,)->int
+        #with open(os.path.join(TOPOLOGIES_DIR, topo)) as f:
+        #    topo_data = json.load(f)
+        #self.local_backup_paths = compute_local_backup_paths(topo_data, max_paths=4)
         #self.local_backup_path={} #局部备份路径，dict{tuple(u,v):[[tuple(u,v),edge2...],path2...]}
         self.failed_link=failed_link
         # -----------------------------
@@ -92,7 +93,7 @@ class TealEnv(object):
 
     def reset(self, mode='test'):
         """Reset the initial conditions in the beginning."""
-
+        self.mode = mode
         if mode == 'train':
             self.idx_start, self.idx_stop = self.train_start, self.train_stop
         elif mode == 'test':
@@ -106,6 +107,37 @@ class TealEnv(object):
         """Return observation (capacity + traffic matrix)."""
 
         return self.obs
+# 更新拓扑和对应的参数
+    def _update_topology(self, topo_fname):
+
+        with open(topo_fname) as f:
+            topo_data = json.load(f)
+        self.G = json_graph.node_link_graph(topo_data)
+
+        self.capacity = torch.FloatTensor(
+            [float(c_e) for u, v, c_e in self.G.edges.data('capacity')])
+        self.num_edge_node = len(self.G.edges)
+
+        # 节点数不变，所以 path_node 总数不变
+        self.num_path_node = self.num_path * self.G.number_of_nodes() * (self.G.number_of_nodes() - 1)
+
+        # 2. 重新计算拓扑矩阵和路径映射 (注意这里传入 topo_fname)
+        #TODO:后面还需要对读路径的部分进行修改，因为topo变了
+        self.edge_index, self.edge_index_values, self.p2e = \
+            self.get_topo_matrix(topo_fname, self.num_path, self.edge_disjoint, self.dist_metric)
+
+        # 3. 重新初始化 ADMM (因为 num_edge_node 和 p2e 可能因为链路增减而改变)
+        self.ADMM = ADMM(
+            self.p2e, self.num_path, self.num_path_node,
+            self.num_edge_node, self.rho, self.device)
+
+        # 4. 更新局部备份路径和链路索引
+        #self.local_backup_paths = compute_local_backup_paths(topo_data, max_paths=4)
+        #测试的时候才读入备份路径
+        if self.mode == 'test'and self.failed_link:
+            self.local_backup_paths = self.get_local_backup_paths(topo_fname,topo_data,max_paths=8)
+        self.edge2idx_dict = {edge: idx for idx, edge in enumerate(self.G.edges)}
+
 #TODO:从文件中获取observation，如果要修改输入的话可能要在这里修改
     """
     🧠 总结一句话
@@ -121,7 +153,13 @@ class TealEnv(object):
         """Return observation (capacity + traffic matrix) from files."""
 
         topo, topo_fname, tm_fname = self.problems[self.idx]
+        # 【核心新增】每次读取新样本时，先刷新拓扑状态！
+        self._update_topology(topo_fname)
         #价值流量矩阵
+        import sys
+        import numpy
+
+        sys.modules['numpy._core'] = numpy.core
         with open(tm_fname, 'rb') as f:
             tm = pickle.load(f)
         # remove demands within nodes
@@ -210,8 +248,8 @@ class TealEnv(object):
                 reward = self.get_obj(action)
             else:
                 #有链路故障
-                reward = self.get_obj(action)
-                #reward = self.get_obj_with_failure_without_local_backup(action,failed_link)
+                #reward = self.get_obj(action)
+                reward = self.get_obj_with_failure_without_local_backup(action,failed_link)
                 #reward = self.get_obj_with_failure_by_local_backup(action, failed_link)
         # next observation
         self._next_obs()
@@ -359,7 +397,7 @@ class TealEnv(object):
         # case1:如果健康路径上本来就有流量，按原有的流量比例进行同比例放大
         # 构建重分配权重矩阵
         weights = torch.zeros_like(action_2d)
-        case1 = remaining_flow > 0
+        case1 = remaining_flow > 1e-9
         if case1.any():
             # case1是1维，代表第几个demand,weights是2维，行是Demand数量，列是每对Demand的路径数，值是每条路径的分流权重
             # 通过广播机制，可以得到每个Demand对应每条路径的分流权重
@@ -367,7 +405,8 @@ class TealEnv(object):
             weights[case1] = action_2d[case1] / remaining_flow[case1].unsqueeze(1)
 
         # case2：如果健康路径原本分配的流量是0（比如全压在主路径上了），那就把丢失的流量均分给剩下的健康路径
-        case2 = (remaining_flow == 0) & (num_healthy_paths > 0)
+        # 小于1e-9可以认为是0了
+        case2 = (remaining_flow < 1e-9) & (num_healthy_paths > 0)
         if case2.any():
             #1/剩余健康路径数   0/剩余健康路径数（对故障path）
             weights[case2] = is_path_healthy_2d[case2].float() / num_healthy_paths[case2].unsqueeze(1).float()
@@ -582,35 +621,70 @@ class TealEnv(object):
         return json_graph.node_link_graph(data)
 # TODO 需要设计一下获得不同时间片的路径文件
     #返回路径文件名
-    def path_full_fname(self, topo, num_path, edge_disjoint, dist_metric):
+    def path_full_fname(self, topo_fname, num_path, edge_disjoint, dist_metric):
         """Return full name of the topology path."""
-
+        # 提取当前拓扑的名字，比如从 '/path/B4_0_1.0_topo.json' 提取 'B4_0_1.0_topo'
+        basename = os.path.basename(topo_fname).split('.json')[0]
         return os.path.join(
             TOPOLOGIES_DIR, "paths", "path-form",
             "{}-{}-paths_edge-disjoint-{}_dist-metric-{}-dict.pkl".format(
-                topo, num_path, edge_disjoint, dist_metric))
+                basename, num_path, edge_disjoint, dist_metric))
+    # 返回备份路径的文件名
+    def backup_path_full_fname(self, topo_fname, max_paths):
+        """Return full name of the topology  backup path."""
+        basename = os.path.basename(topo_fname).split('.json')[0]
+        # 路径存在的文件夹：topologies/paths/backup-paths
+        save_dir = os.path.join(TOPOLOGIES_DIR, "paths", "backup-paths")
+        os.makedirs(save_dir, exist_ok=True)
+        #路径名：topologies/paths/backup-paths/B4-backup-paths-max_num-8.pkl
+        return os.path.join(
+            save_dir,
+            f"{basename}-backup-paths-max_num-{max_paths}.pkl"
+        )
+
+
+
 # TODO 设计一下获得不同时间片的路径
     #读取路径文件获得路径
-    def get_path(self, topo, num_path, edge_disjoint, dist_metric):
+    def get_path(self, topo_fname, num_path, edge_disjoint, dist_metric):
         """Return path dictionary."""
 
         self.path_fname = self.path_full_fname(
-            topo, num_path, edge_disjoint, dist_metric)
-        print("Loading paths from pickle file", self.path_fname)
+            topo_fname, num_path, edge_disjoint, dist_metric)
+        #print("Loading paths from pickle file", self.path_fname)
         try:
             with open(self.path_fname, 'rb') as f:
                 path_dict = pickle.load(f)
-                print("path_dict size:", len(path_dict))
                 return path_dict
         except FileNotFoundError:
-            print("Creating paths {}".format(self.path_fname))
+            #print("Creating paths {}".format(self.path_fname))
             path_dict = self.compute_path(
-                topo, num_path, edge_disjoint, dist_metric)
-            print("Saving paths to pickle file")
+                topo_fname, num_path, edge_disjoint, dist_metric)
+            #print("Saving paths to pickle file")
             with open(self.path_fname, "wb") as w:
                 pickle.dump(path_dict, w)
         return path_dict
-# 如果没有读到路径文件，则计算路径
+
+# 读取备份路径文件
+    def get_local_backup_paths(self, topo_fname, topo_data, max_paths=8):
+        backup_path_fname = self.backup_path_full_fname(topo_fname, max_paths)
+        #print("Loading backup paths from pickle file", backup_path_fname)
+        try:
+            with open(backup_path_fname, 'rb') as f:
+                local_backup_paths = pickle.load(f)
+                return local_backup_paths
+        except FileNotFoundError:
+            #print(f"Creating local backup paths {backup_path_fname}")
+            # 如果文件不存在，则调用你的计算函数
+            local_backup_paths = compute_local_backup_paths(topo_data, max_paths=max_paths)
+
+            # 计算完后立刻存入文件，下次直接秒读
+            #print(f"Saving local backup paths to {backup_path_fname}")
+            with open(backup_path_fname, "wb") as w:
+                pickle.dump(local_backup_paths, w)
+
+            return local_backup_paths
+
     def compute_path(self, topo, num_path, edge_disjoint, dist_metric):
         """Return path dictionary through computation."""
 
@@ -625,12 +699,12 @@ class TealEnv(object):
                 path_dict[(s_k, t_k)] = paths_no_cycles
         return path_dict
 
-    def get_regular_path(self, topo, num_path, edge_disjoint, dist_metric):
+    def get_regular_path(self, topo_fname, num_path, edge_disjoint, dist_metric):
         """Return path dictionary with the same number of paths per demand.
         Fill with the first path when number of paths is not enough.
         """
 
-        path_dict = self.get_path(topo, num_path, edge_disjoint, dist_metric)
+        path_dict = self.get_path(topo_fname, num_path, edge_disjoint, dist_metric)
         for (s_k, t_k) in path_dict:
             ## 路径数量不足：用第一条路径重复填充，补到目标数量
             if len(path_dict[(s_k, t_k)]) < self.num_path:
@@ -642,7 +716,7 @@ class TealEnv(object):
                 path_dict[(s_k, t_k)] = path_dict[(s_k, t_k)][:self.num_path]
         return path_dict
 
-    def get_topo_matrix(self, topo, num_path, edge_disjoint, dist_metric):
+    def get_topo_matrix(self, topo_fname, num_path, edge_disjoint, dist_metric):
         """
         Return matrices related to topology.
         edge_index, edge_index_values: index and value for matrix
@@ -652,7 +726,7 @@ class TealEnv(object):
 
         # get regular path dict
         path_dict = self.get_regular_path(
-            topo, num_path, edge_disjoint, dist_metric)
+            topo_fname, num_path, edge_disjoint, dist_metric)
 
         # edge nodes' degree, index lookup
         #对每个链路找一个链路标识
@@ -666,6 +740,9 @@ class TealEnv(object):
             for t in range(len(self.G)):
                 if s == t:
                     continue
+                # if (s, t) not in path_dict:
+                #     print("No path between {} and {}".format(s, t))
+                #     continue
                 for path in path_dict[(s, t)]:
                     for (u, v) in zip(path[:-1], path[1:]):
                         #src.append(edge_num+path_i)：给当前路径分配一个唯一标识（edge_num 是基础值，path_i 是路径序号），存入 src；

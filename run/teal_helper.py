@@ -14,6 +14,7 @@ PROBLEM_NAMES = [
     'UsCarrier.json',
     'Kdl.json',
     'ASN2k.json',
+    'iridium.json',
 ]
 TM_MODELS = [
     "real",
@@ -35,17 +36,33 @@ HOLDOUT_PROBLEMS = []
 GROUPED_BY_HOLDOUT_PROBLEMS = defaultdict(list)
 
 for problem_name in PROBLEM_NAMES:
+    # 1. 提取不带后缀的基础拓扑名 (例如 'B4.json' -> 'B4', 'ASN2k.graphml' -> 'ASN2k')
+    base_prob_name = problem_name.replace(".json", "").replace(".graphml", "")
+    #确定文件夹和文件后缀
     if problem_name.endswith(".graphml"):
-        topo_fname = os.path.join(TOPOLOGIES_DIR, "topology-zoo", problem_name)
+        base_topo_dir = os.path.join(TOPOLOGIES_DIR, "topology-zoo")
+        topo_ext = ".graphml"
     else:
-        topo_fname = os.path.join(TOPOLOGIES_DIR, problem_name)
+        base_topo_dir = TOPOLOGIES_DIR
+        topo_ext = ".json"
+
     for model in TM_MODELS:
         for tm_fname in iglob(
             "{}/{}/{}*_traffic-matrix.pkl".format(TM_DIR, model, problem_name)
         ):
-            vals = os.path.basename(tm_fname)[:-4].split("_")
-            _, traffic_seed, scale_factor = vals[1], int(vals[2]),\
-                float(vals[3])
+            tm_basename = os.path.basename(tm_fname)
+
+            # 解析原有的 TM 文件名: B4.json_real_0_1.0_traffic-matrix.pkl
+            vals = tm_basename[:-4].split("_")
+            seed_str = vals[2]  # 提取 "0"
+            scale_str = vals[3]  # 提取 "1.0"
+            #拼接拓扑文件名: B4_0_1.0_topo.json
+            topo_basename = f"{base_prob_name}_{seed_str}_{scale_str}_topo{topo_ext}"
+            topo_fname = os.path.join(base_topo_dir, topo_basename)
+            # 转换为数值型，保留原有的后续逻辑
+            traffic_seed = int(seed_str)
+            scale_factor = float(scale_str)
+
             GROUPED_BY_PROBLEMS[(problem_name, model, scale_factor)].append(
                 (topo_fname, tm_fname)
             )
@@ -77,6 +94,8 @@ for key, vals in GROUPED_BY_HOLDOUT_PROBLEMS.items():
 
 def get_problems(args):
     if (args.topo, args.tm_model, args.scale_factor) not in GROUPED_BY_PROBLEMS:
+        print(args.topo, args.tm_model, args.scale_factor)
+        print(GROUPED_BY_PROBLEMS)
         raise Exception('Traffic matrices not found')
     problems = []
     for topo_fname, tm_fname in GROUPED_BY_PROBLEMS[
