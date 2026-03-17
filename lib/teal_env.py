@@ -26,7 +26,7 @@ class TealEnv(object):
             self, obj, topo, problems,
             num_path, edge_disjoint, dist_metric, rho,
             train_size, val_size, test_size, num_failure, device,
-            raw_action_min=-10.0, raw_action_max=10.0,failed_link=[]):
+            raw_action_min=-10.0, raw_action_max=10.0,failed_link=[],exp_mode='teal'):
         """Initialize Teal environment.
 
         Args:
@@ -89,6 +89,7 @@ class TealEnv(object):
         #self.local_backup_paths = compute_local_backup_paths(topo_data, max_paths=4)
         #self.local_backup_path={} #局部备份路径，dict{tuple(u,v):[[tuple(u,v),edge2...],path2...]}
         self.failed_link=failed_link
+        self.exp_mode=exp_mode
         # -----------------------------
         self.reset('train')
 
@@ -238,7 +239,10 @@ class TealEnv(object):
             if self.obj == 'total_flow':
                 # total flow require no constraint violation
                 action = self.ADMM.tune_action(self.obs, action, num_admm_step)
-                action = self.round_action(action)
+                # 没有链路故障时才用round去掉重复的流量，有故障且在对比实验为total_flow时再用round
+                if len(self.failed_link)==0:
+                    action=self.round_action(action)
+
             info['runtime'] = time.time() - start_time
             info['sol_mat'] = self.extract_sol_mat(action)
             #TODO:在这里实现reweave的局部路径修补机制
@@ -248,10 +252,15 @@ class TealEnv(object):
                 #没有链路故障
                 reward = self.get_obj(action)
             else:
-                #有链路故障
-                #reward = self.get_obj(action)
-                reward = self.get_obj_with_failure_without_local_backup(action,failed_link)
-                #reward = self.get_obj_with_failure_by_local_backup(action, failed_link)
+                #有故障
+                if self.exp_mode=='teal' and self.obj=='total_flow':
+                    # action = self.round_action(action)
+                    # reward = self.get_obj(action)
+                    reward = self.get_obj_with_failure_without_local_backup(action, failed_link)
+                elif self.exp_mode=='teal' and self.obj!='total_flow':
+                    reward = self.get_obj_with_failure_without_local_backup(action, failed_link)
+                else  :
+                    reward = self.get_obj_with_failure_by_local_backup(action, failed_link)
         # next observation
         self._next_obs()
         return reward, info

@@ -177,6 +177,9 @@ def get_args_and_problems(formatted_fname_template, additional_args=[]):
     parser.add_argument(
         '--early-stop', type=bool, default=False,
         help='whether to stop early')
+    parser.add_argument(
+        '--exp_mode', type=bool, default='teal',
+        help='experiment mode : teal or reweave')
 
     # testing hyper-parameters
     parser.add_argument(
