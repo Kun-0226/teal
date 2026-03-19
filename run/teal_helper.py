@@ -178,8 +178,11 @@ def get_args_and_problems(formatted_fname_template, additional_args=[]):
         '--early-stop', type=bool, default=False,
         help='whether to stop early')
     parser.add_argument(
-        '--exp_mode', type=bool, default='teal',
+        '--exp_mode', type=str, default='teal',
         help='experiment mode : teal or reweave')
+    parser.add_argument(
+        '--nn', type=str, default='FlowGNN',
+        help='Neural Network : FlowGNN or MPNN')
 
     # testing hyper-parameters
     parser.add_argument(
@@ -192,7 +195,7 @@ def get_args_and_problems(formatted_fname_template, additional_args=[]):
 
     slice_str = "all"  # "slice_" + "_".join(str(i) for i in args.slices)
     formatted_fname_substr = formatted_fname_template.format(
-        args.obj, slice_str)
+        args.exp_mode,args.obj,args.topo, args.nn,slice_str)
     return args, formatted_fname_substr, get_problems(args)
 
 

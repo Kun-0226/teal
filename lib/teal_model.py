@@ -169,6 +169,10 @@ class Teal():
                         problem_dict['dist_metric'])))
 
                 PLACEHOLDER = ",".join("{}" for _ in output_header)
+                if self.env.exp_mode == 'teal':
+                    mode="Teal"
+                elif self.env.exp_mode == 'reweave':
+                    mode="Reweave"
                 result_line = PLACEHOLDER.format(
                     problem_dict['problem_name'],
                     problem_dict['num_node'],
@@ -177,7 +181,7 @@ class Teal():
                     problem_dict['scale_factor'],
                     problem_dict['traffic_model'],
                     problem_dict['total_demand'],
-                    "Teal",
+                    mode,
                     problem_dict['num_path'],
                     problem_dict['edge_disjoint'],
                     problem_dict['dist_metric'],

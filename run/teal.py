@@ -33,8 +33,8 @@ HEADERS = [
     "runtime",
 ]
 
-OUTPUT_CSV_TEMPLATE = "teal-{}-{}.csv"
-
+#OUTPUT_CSV_TEMPLATE = "teal-{}-{}.csv"
+OUTPUT_CSV_TEMPLATE="{}-{}-{}-{}-{}.csv" #{算法}-{obj}-{topo}-{nn}-all ex:teal-total_flow-iridium.json-MPNN-all.csv
 
 def benchmark(problems, output_csv, arg):
 
@@ -61,7 +61,8 @@ def benchmark(problems, output_csv, arg):
     num_admm_step = args.admm_steps
     # testing hyper-parameters
     num_failure = args.failures
-
+    exp_mode=args.exp_mode
+    nn = args.nn
     # ========== init teal env, actor, model
     teal_env = TealEnv(
         obj=obj,
@@ -76,13 +77,17 @@ def benchmark(problems, output_csv, arg):
         test_size=test_size,
         num_failure=num_failure,
         device=device,
-        failed_link=[(0,1)])
+        exp_mode=exp_mode,
+        #failed_link=[(42,43),(43,42),(60,5),(5,60),(51,52),(52,51)] # iridium
+        #failed_link=[]
+        )
     teal_actor = TealActor(
         teal_env=teal_env,
         num_layer=num_layer,
         model_dir=MODEL_DIR,
         model_save=model_save,
-        device=device)
+        device=device,
+        network=nn)
     teal = Teal(
         teal_env=teal_env,
         teal_actor=teal_actor,
@@ -90,10 +95,10 @@ def benchmark(problems, output_csv, arg):
         early_stop=early_stop)
 
     # ========== train and test
-    teal.train(
-        num_epoch=num_epoch,
-        batch_size=batch_size,
-        num_sample=num_sample)
+    # teal.train(
+    #    num_epoch=num_epoch,
+    #    batch_size=batch_size,
+    #    num_sample=num_sample)
     teal.test(
         num_admm_step=num_admm_step,
         output_header=HEADERS,

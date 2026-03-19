@@ -9,7 +9,9 @@ import torch.nn.functional as F
 from torch.distributions.normal import Normal
 from torch.distributions.multinomial import Multinomial
 
-from .FlowGNN import FlowGNN
+#from .FlowGNN import FlowGNN
+#测试一下FlowGNN改成MPNN的效果
+#from .MPNN import FlowGNN
 from .utils import weight_initialization, print_
 
 
@@ -17,7 +19,7 @@ class TealActor(nn.Module):
 
     def __init__(
             self, teal_env, num_layer, model_dir, model_save, device,
-            std=1, log_std_min=-10.0, log_std_max=10.0):
+            std=1, log_std_min=-10.0, log_std_max=10.0,network='FlowGNN'):
         """Initialize teal actor.
 
         Args:
@@ -39,9 +41,13 @@ class TealActor(nn.Module):
         self.num_path_node = self.env.num_path_node
 
         # init FlowGNN
+        if network=='FlowGNN':
+            from .FlowGNN import FlowGNN
+        elif network=='MPNN':
+            from .MPNN import FlowGNN
         self.device = device
         self.FlowGNN = FlowGNN(self.env, num_layer).to(self.device)
-
+        self.nn=network
         # init COMA policy
         self.std = std
         self.log_std_max = log_std_max
@@ -66,8 +72,8 @@ class TealActor(nn.Module):
         """Return full name of the ML model."""
 
         return os.path.join(
-            model_dir, "{}_flowGNN-{}_std-{}.pt".format(
-                topo, num_layer, std < 0))
+            model_dir, "{}_{}-{}_std-{}.pt".format(
+                topo, self.nn,num_layer, std < 0))
 
     def load_model(self):
         """Load from model fname."""

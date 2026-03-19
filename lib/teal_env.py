@@ -238,7 +238,7 @@ class TealEnv(object):
             action = self.transform_raw_action(raw_action)
             if self.obj == 'total_flow':
                 # total flow require no constraint violation
-                action = self.ADMM.tune_action(self.obs, action, num_admm_step)
+                #action = self.ADMM.tune_action(self.obs, action, num_admm_step)
                 # 没有链路故障时才用round去掉重复的流量，有故障且在对比实验为total_flow时再用round
                 if len(self.failed_link)==0:
                     action=self.round_action(action)

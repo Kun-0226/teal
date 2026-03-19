@@ -11,6 +11,19 @@ def weight_initialization(module):
     if isinstance(module, nn.Linear):
         torch.nn.init.xavier_uniform_(module.weight, gain=1)
         torch.nn.init.constant_(module.bias, 0)
+# 新增：处理 GRU 模块 (包括 nn.GRU 和 nn.GRUCell)
+    elif isinstance(module, (nn.GRU, nn.GRUCell)):
+        for name, param in module.named_parameters():
+            if 'weight_ih' in name:
+                # 输入到隐藏层的权重：使用 Xavier 保持方差一致
+                torch.nn.init.xavier_uniform_(param.data)
+            elif 'weight_hh' in name:
+                # 隐藏层到隐藏层的权重：必须使用正交初始化 (关键！)
+                # 这能确保在 num_layer 次消息传递中，特征向量的模长保持稳定
+                torch.nn.init.orthogonal_(param.data)
+            elif 'bias' in name:
+                # 偏置项初始化为 0
+                torch.nn.init.constant_(param.data, 0)
 
 
 def uni_rand(low=-1, high=1):
@@ -31,7 +44,7 @@ import networkx as nx
 from networkx.readwrite import json_graph
 
 
-def compute_local_backup_paths(topo_json_data, max_paths=4):
+def compute_local_backup_paths(topo_json_data, max_paths=8):
     """
     计算任意相邻节点对（即每一条链路）的局部备份路径
     :param topo_json_data: 包含拓扑信息的 dict
