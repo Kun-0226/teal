@@ -63,6 +63,7 @@ def benchmark(problems, output_csv, arg):
     num_failure = args.failures
     exp_mode=args.exp_mode
     nn = args.nn
+    failed_link=[(42,43),(43,42)]
     # ========== init teal env, actor, model
     teal_env = TealEnv(
         obj=obj,
@@ -78,7 +79,7 @@ def benchmark(problems, output_csv, arg):
         num_failure=num_failure,
         device=device,
         exp_mode=exp_mode,
-        #failed_link=[(42,43),(43,42),(60,5),(5,60),(51,52),(52,51)] # iridium
+        failed_link=failed_link# iridium
         #failed_link=[]
         )
     teal_actor = TealActor(

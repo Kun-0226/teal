@@ -71,9 +71,13 @@ class TealActor(nn.Module):
     def model_full_fname(self, model_dir, topo, num_layer, std):
         """Return full name of the ML model."""
 
+        # return os.path.join(
+        #     model_dir, "{}_{}-{}_std-{}.pt".format(
+        #         topo, self.nn,num_layer, std < 0))
         return os.path.join(
-            model_dir, "{}_{}-{}_std-{}.pt".format(
-                topo, self.nn,num_layer, std < 0))
+            model_dir, "{}_{}_{}_{}_std_{}.pt".format(
+                topo, self.env.obj,self.nn,num_layer, std < 0))
+
 
     def load_model(self):
         """Load from model fname."""

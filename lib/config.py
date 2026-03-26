@@ -2,14 +2,14 @@
 配置拓扑和流量文件地址
 """
 import os
-
+#
 # TL_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), ".."))
 # TOPOLOGIES_DIR = os.path.join(TL_DIR, "topologies")
 # TM_DIR = os.path.join(TL_DIR, "traffic-matrices")
 
 
 
-# 适用于卫星数据的路径读取
+#适用于卫星数据的路径读取
 
 def get_data_paths(data_name):
 
